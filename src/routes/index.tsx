@@ -235,7 +235,7 @@ function Game() {
 
   async function think(h: Turn[], w: string[]) {
     setPhase("thinking");
-    setComment(IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)]);
+    setComment(IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)] ?? "");
     try {
       const asked = h.filter((t) => t.kind === "question").length;
       if (w.length >= 3 && asked >= 20) {
