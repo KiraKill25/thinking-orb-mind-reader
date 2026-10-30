@@ -8,7 +8,7 @@ const turn = z.object({
 });
 
 export const orbNextTurn = createServerFn({ method: "POST" })
-  .inputValidator(
+  .validator(
     z.object({
       history: z.array(turn).max(60),
       wrongGuesses: z.array(z.string().max(200)).max(20),
@@ -21,7 +21,7 @@ export const orbNextTurn = createServerFn({ method: "POST" })
   });
 
 export const orbJoker = createServerFn({ method: "POST" })
-  .inputValidator(z.object({ history: z.array(turn).max(60), question: z.string().min(1).max(300) }))
+  .validator(z.object({ history: z.array(turn).max(60), question: z.string().min(1).max(300) }))
   .handler(async ({ data }) => {
     const { jokerAnswer } = await import("./orb.server");
     return { text: await jokerAnswer(data.history, data.question) };
