@@ -8,3 +8,4 @@
 > Commits you push to the connected branch sync back to Lovable and show up in
 > the editor, so keep the branch in a working state.
 <!-- LOVABLE:END -->
+- AI game logic lives in src/lib/orb.server.ts (server-only) exposed via src/lib/orb.functions.ts server functions; keeps the AI key off the browser.
