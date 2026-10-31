@@ -1,15 +1,26 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
+import { zodValidator, fallback } from "@tanstack/zod-adapter";
+import { z } from "zod";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { orbJoker, orbNextTurn } from "@/lib/orb.functions";
+import { ANSWER_KEYS, LATIN_ANSWERS, MENU, T, parseOrder, type Lang } from "@/lib/mazaj-menu";
+import logo from "@/assets/mazaj-logo.png.asset.json";
+
+const search = z.object({
+  table: fallback(z.string(), "").default(""),
+  items: fallback(z.string(), "").default(""),
+  lang: fallback(z.string(), "").default(""),
+});
 
 export const Route = createFileRoute("/")({
+  validateSearch: zodValidator(search),
   head: () => ({
     meta: [
-      { title: "THE ORB — 20Q Mind Reader" },
-      { name: "description", content: "Think of anything. The psychic Orb will read your mind in 20 questions or fewer." },
-      { property: "og:title", content: "THE ORB — 20Q Mind Reader" },
-      { property: "og:description", content: "A retro 1980s psychic machine that reads your mind in 20 questions." },
+      { title: "Mazaj — The Mind Reader of Mazaj Coffee Shop" },
+      { name: "description", content: "Think of anything. Mazaj, the spirit of Mazaj Coffee & Brunch, reads your mind in 20 questions." },
+      { property: "og:title", content: "Mazaj — The Mind Reader" },
+      { property: "og:description", content: "Sip, think, and let Mazaj read your mind in 20 questions or fewer." },
     ],
   }),
   component: Game,
@@ -19,28 +30,18 @@ type Turn = { kind: "question" | "guess"; text: string; answer: string };
 type Move = { type: "question" | "guess"; text: string; commentary: string; confidence: number };
 type Phase = "intro" | "thinking" | "asking" | "guessing" | "won" | "lost" | "error";
 
-const ANSWERS = ["Yes", "No", "Sometimes", "Doubtful", "Irrelevant"] as const;
-const IDLE_LINES = [
-  "Your neurons are… loud.",
-  "I sense a shape in the static.",
-  "Do not resist. It only helps me.",
-  "The pattern tightens.",
-  "Interesting. Most interesting.",
-];
-
-/* ---------- Audio ---------- */
-function useSynth() {
+/* ---------- Sound: soft warm tones ---------- */
+function useSound() {
   const ctx = useRef<AudioContext | null>(null);
-  const hum = useRef<{ g: GainNode; o: OscillatorNode[] } | null>(null);
+  const pad = useRef<{ g: GainNode; o: OscillatorNode[] } | null>(null);
   const [on, setOn] = useState(false);
-  const ensure = () => (ctx.current ??= new AudioContext());
   const toggle = () => {
-    const c = ensure();
-    if (hum.current) {
-      hum.current.g.gain.linearRampToValueAtTime(0, c.currentTime + 0.5);
-      const h = hum.current;
-      setTimeout(() => h.o.forEach((o) => o.stop()), 600);
-      hum.current = null;
+    const c = (ctx.current ??= new AudioContext());
+    if (pad.current) {
+      const p = pad.current;
+      p.g.gain.linearRampToValueAtTime(0, c.currentTime + 0.8);
+      setTimeout(() => p.o.forEach((o) => o.stop()), 900);
+      pad.current = null;
       setOn(false);
       return;
     }
@@ -48,181 +49,139 @@ function useSynth() {
     g.gain.value = 0;
     const f = c.createBiquadFilter();
     f.type = "lowpass";
-    f.frequency.value = 420;
-    const lfo = c.createOscillator();
-    const lg = c.createGain();
-    lfo.frequency.value = 0.15;
-    lg.gain.value = 180;
-    lfo.connect(lg).connect(f.frequency);
-    const os = [55, 82.5, 110.3].map((fr, i) => {
+    f.frequency.value = 600;
+    const os = [110, 164.8, 220.5].map((fr) => {
       const o = c.createOscillator();
-      o.type = i === 1 ? "triangle" : "sawtooth";
+      o.type = "sine";
       o.frequency.value = fr;
       o.connect(f);
       o.start();
       return o;
     });
-    lfo.start();
     f.connect(g).connect(c.destination);
-    g.gain.linearRampToValueAtTime(0.06, c.currentTime + 1.5);
-    hum.current = { g, o: [...os, lfo] };
+    g.gain.linearRampToValueAtTime(0.04, c.currentTime + 2);
+    pad.current = { g, o: os };
     setOn(true);
   };
-  const blip = (freq = 660, dur = 0.08) => {
+  const chime = (freq = 880, dur = 0.5) => {
     if (!on || !ctx.current) return;
     const c = ctx.current;
     const o = c.createOscillator();
     const g = c.createGain();
-    o.type = "square";
+    o.type = "sine";
     o.frequency.value = freq;
-    g.gain.setValueAtTime(0.05, c.currentTime);
+    g.gain.setValueAtTime(0.06, c.currentTime);
     g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
     o.connect(g).connect(c.destination);
     o.start();
     o.stop(c.currentTime + dur);
   };
-  return { on, toggle, blip };
+  return { on, toggle, chime };
 }
 
-/* ---------- Orb ---------- */
-function Orb({ mode, confidence }: { mode: "idle" | "think" | "reveal"; confidence: number }) {
-  const particles = useMemo(
-    () =>
-      Array.from({ length: 22 }, (_, i) => ({
-        left: 10 + ((i * 37) % 80),
-        top: 55 + ((i * 53) % 35),
-        delay: (i * 0.37) % 4,
-        dur: 3 + ((i * 0.7) % 3),
-        dx: `${((i * 29) % 60) - 30}px`,
-      })),
-    [],
-  );
-  const hot = mode === "reveal";
+/* ---------- The core: a glass sphere of swirling coffee ---------- */
+function Core({ mode, confidence }: { mode: "idle" | "think" | "reveal"; confidence: number }) {
+  const speed = mode === "think" ? 4 : mode === "reveal" ? 14 : 22;
   return (
-    <div className="relative mx-auto aspect-square w-64 sm:w-80">
+    <div className="relative mx-auto aspect-square w-56 sm:w-72">
       <div
-        className="absolute inset-0 rounded-full blur-3xl"
+        className="absolute -inset-8 rounded-full blur-3xl transition-opacity duration-1000"
         style={{
-          background: `radial-gradient(circle, color-mix(in oklab, var(${hot ? "--amber" : "--glow"}) ${30 + confidence / 2}%, transparent), transparent 70%)`,
+          background: `radial-gradient(circle, color-mix(in oklab, var(--primary) ${20 + confidence / 3}%, transparent), transparent 70%)`,
         }}
       />
+      <div className="absolute inset-0 rounded-full border border-border" />
+      <div className="absolute inset-3 rounded-full border border-border/60" style={{ animation: `swirl ${speed * 3}s linear infinite` }}>
+        <span className="absolute -top-1 left-1/2 h-2 w-2 -translate-x-1/2 rounded-full bg-primary" />
+      </div>
       <div
-        className="absolute inset-2 rounded-full border border-primary/30"
-        style={{ animation: "spin-slow 24s linear infinite", borderStyle: "dashed" }}
-      />
-      <div
-        className="absolute inset-6 rounded-full border border-accent/30"
-        style={{ animation: "spin-slow 14s linear infinite reverse", borderStyle: "dotted" }}
-      />
-      <div
-        className="absolute inset-10 overflow-hidden rounded-full"
+        className="absolute inset-8 overflow-hidden rounded-full"
         style={{
-          animation: `${mode === "think" ? "orb-think 1.1s" : "orb-pulse 4s"} ease-in-out infinite`,
-          background: `radial-gradient(circle at 35% 30%, color-mix(in oklab, var(--foreground) 90%, transparent), var(${hot ? "--amber" : "--glow"}) 25%, color-mix(in oklab, var(${hot ? "--amber" : "--glow"}) 35%, var(--background)) 60%, var(--background) 100%)`,
-          boxShadow: `0 0 60px color-mix(in oklab, var(${hot ? "--amber" : "--glow"}) 60%, transparent), inset 0 0 40px var(--background)`,
+          animation: `breathe ${mode === "think" ? 1.6 : 5}s ease-in-out infinite`,
+          boxShadow: "inset 0 -20px 40px color-mix(in oklab, var(--background) 80%, transparent), 0 30px 60px -20px color-mix(in oklab, var(--primary) 40%, transparent)",
         }}
       >
-        <div className="crt-scanlines absolute inset-0 opacity-70" />
         <div
-          className="absolute inset-[30%] rounded-full blur-md"
-          style={{ background: "var(--foreground)", opacity: 0.35 + confidence / 250 }}
-        />
-      </div>
-      {particles.map((p, i) => (
-        <span
-          key={i}
-          className="absolute h-1 w-1 rounded-full bg-primary"
+          className="absolute -inset-1/4"
           style={{
-            left: `${p.left}%`,
-            top: `${p.top}%`,
-            ["--dx" as string]: p.dx,
-            animation: `float-up ${mode === "think" ? p.dur / 2 : p.dur}s ${p.delay}s linear infinite`,
-            boxShadow: "0 0 6px var(--glow)",
+            animation: `swirl ${speed}s linear infinite`,
+            background:
+              "conic-gradient(from 0deg, oklch(0.25 0.04 50), oklch(0.55 0.09 60), oklch(0.85 0.06 80), oklch(0.4 0.07 55), oklch(0.62 0.09 210 / 70%), oklch(0.3 0.05 50), oklch(0.25 0.04 50))",
+            filter: "blur(18px)",
           }}
         />
-      ))}
-    </div>
-  );
-}
-
-function Gauge({ value }: { value: number }) {
-  const segs = 20;
-  const lit = Math.round((value / 100) * segs);
-  return (
-    <div>
-      <div className="mb-1 flex justify-between font-display text-lg uppercase tracking-widest text-muted-foreground">
-        <span>Psychic lock</span>
-        <span className={value >= 85 ? "text-amber text-glow-amber" : "text-primary text-glow"}>{value}%</span>
-      </div>
-      <div className="flex gap-1">
-        {Array.from({ length: segs }, (_, i) => (
-          <div
-            key={i}
-            className={`h-4 flex-1 transition-all duration-500 ${
-              i < lit ? (i >= 16 ? "bg-amber" : "bg-primary") : "bg-muted"
-            }`}
-            style={i < lit ? { boxShadow: `0 0 8px var(${i >= 16 ? "--amber" : "--glow"})` } : undefined}
-          />
-        ))}
+        <div
+          className="absolute inset-0 rounded-full"
+          style={{ background: "radial-gradient(circle at 32% 25%, oklch(1 0 0 / 55%), transparent 22%), radial-gradient(circle at 50% 120%, oklch(0 0 0 / 50%), transparent 60%)" }}
+        />
       </div>
     </div>
   );
 }
 
-function TypeText({ text }: { text: string }) {
-  const [n, setN] = useState(0);
-  useEffect(() => {
-    setN(0);
-    const id = setInterval(() => setN((v) => (v >= text.length ? (clearInterval(id), v) : v + 1)), 22);
-    return () => clearInterval(id);
-  }, [text]);
+function Certainty({ value, label }: { value: number; label: string }) {
   return (
-    <span>
-      {text.slice(0, n)}
-      <span className="anim-blink">▌</span>
-    </span>
+    <div className="mx-auto w-full max-w-sm">
+      <div className="mb-2 flex justify-between text-xs uppercase tracking-[0.2em] text-muted-foreground">
+        <span>{label}</span>
+        <span className="tabular-nums text-foreground">{value}%</span>
+      </div>
+      <div className="h-[3px] overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${value}%` }} />
+      </div>
+    </div>
   );
 }
 
-function RetroButton({
+function Btn({
   children,
   onClick,
   disabled,
-  tone = "primary",
+  variant = "ghost",
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
-  tone?: "primary" | "amber" | "muted";
+  variant?: "solid" | "ghost";
 }) {
-  const tones = {
-    primary: "border-primary text-primary hover:bg-primary hover:text-primary-foreground",
-    amber: "border-amber text-amber hover:bg-amber hover:text-accent-foreground",
-    muted: "border-muted-foreground text-muted-foreground hover:bg-muted-foreground hover:text-background",
-  };
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-sm border-2 bg-card px-4 py-3 font-display text-2xl uppercase tracking-widest shadow-[0_4px_0_0_var(--muted)] transition-all active:translate-y-1 active:shadow-none disabled:pointer-events-none disabled:opacity-30 ${tones[tone]}`}
+      className={`rounded-full px-6 py-3 text-sm font-medium tracking-wide transition-all duration-300 active:scale-95 disabled:pointer-events-none disabled:opacity-40 ${
+        variant === "solid"
+          ? "bg-primary text-primary-foreground hover:shadow-[0_10px_30px_-10px_var(--primary)]"
+          : "glass text-foreground hover:border-primary/60 hover:text-primary"
+      }`}
     >
-      [{children}]
+      {children}
     </button>
   );
 }
 
 /* ---------- Game ---------- */
 function Game() {
+  const q = Route.useSearch();
+  const navigate = useNavigate({ from: "/" });
   const next = useServerFn(orbNextTurn);
   const joker = useServerFn(orbJoker);
-  const synth = useSynth();
+  const sound = useSound();
+
+  const lang: Lang = q.lang === "ar" || q.lang === "fr" || q.lang === "en" ? q.lang : "fr";
+  const [latin, setLatin] = useState(false);
+  const t = T[lang];
+  const table = q.table.slice(0, 20) || null;
+  const order = useMemo(() => parseOrder(q.items), [q.items]);
+  const orderNames = order.map((m) => m[lang]);
+  const ctx = { lang, latin: lang === "ar" && latin, table, items: order.map((m) => m.fr) };
+  const label = (a: (typeof ANSWER_KEYS)[number]) => (lang === "ar" && latin ? LATIN_ANSWERS[a] : t.answers[a]);
 
   const [phase, setPhase] = useState<Phase>("intro");
   const [history, setHistory] = useState<Turn[]>([]);
   const [wrong, setWrong] = useState<string[]>([]);
   const [move, setMove] = useState<Move | null>(null);
   const [confidence, setConfidence] = useState(0);
-  const [comment, setComment] = useState("Think of anything. A thing, a creature, a person, a place, an idea.");
+  const [comment, setComment] = useState("");
   const [error, setError] = useState("");
   const [jokerUsed, setJokerUsed] = useState(false);
   const [jokerOpen, setJokerOpen] = useState(false);
@@ -230,26 +189,28 @@ function Game() {
   const [jokerA, setJokerA] = useState("");
   const [jokerBusy, setJokerBusy] = useState(false);
   const [reveal, setReveal] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.lang = lang;
+    document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+  }, [lang]);
 
   const questionsAsked = history.filter((h) => h.kind === "question").length;
 
   async function think(h: Turn[], w: string[]) {
     setPhase("thinking");
-    setComment(IDLE_LINES[Math.floor(Math.random() * IDLE_LINES.length)] ?? "");
     try {
-      const asked = h.filter((t) => t.kind === "question").length;
-      if (w.length >= 3 && asked >= 20) {
-        setPhase("lost");
-        return;
-      }
-      const m = await next({ data: { history: h, wrongGuesses: w, questionsAsked: asked } });
+      const asked = h.filter((x) => x.kind === "question").length;
+      if (w.length >= 3 && asked >= 20) return setPhase("lost");
+      const m = await next({ data: { history: h, wrongGuesses: w, questionsAsked: asked, ...ctx } });
       setMove(m);
       setConfidence(m.confidence);
       setComment(m.commentary);
-      synth.blip(m.type === "guess" ? 330 : 880, 0.15);
+      sound.chime(m.type === "guess" ? 523 : 784);
       setPhase(m.type === "guess" ? "guessing" : "asking");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "The signal was lost.");
+      setError(e instanceof Error ? e.message : "…");
       setPhase("error");
     }
   }
@@ -260,15 +221,16 @@ function Game() {
     setMove(null);
     setConfidence(0);
     setJokerUsed(false);
+    setJokerOpen(false);
     setJokerA("");
     setJokerQ("");
     setReveal("");
+    setComment("");
     think([], []);
   }
 
   function answer(a: string) {
     if (!move) return;
-    synth.blip(520);
     const h = [...history, { kind: move.type, text: move.text, answer: a }];
     setHistory(h);
     if (move.type === "guess") {
@@ -276,14 +238,13 @@ function Game() {
         setReveal(move.text);
         setConfidence(100);
         setPhase("won");
-        synth.blip(220, 1.2);
+        sound.chime(392, 1.6);
         return;
       }
       const w = [...wrong, move.text];
       setWrong(w);
       setConfidence((c) => Math.max(10, c - 30));
-      think(h, w);
-      return;
+      return think(h, w);
     }
     think(h, wrong);
   }
@@ -292,135 +253,181 @@ function Game() {
     if (!jokerQ.trim()) return;
     setJokerBusy(true);
     try {
-      const r = await joker({ data: { history, question: jokerQ.trim() } });
+      const r = await joker({ data: { history, question: jokerQ.trim(), ...ctx } });
       setJokerA(r.text);
       setJokerUsed(true);
     } catch (e) {
-      setJokerA(e instanceof Error ? e.message : "The Orb refuses.");
+      setJokerA(e instanceof Error ? e.message : "…");
     } finally {
       setJokerBusy(false);
     }
   }
 
-  const orbMode = phase === "thinking" ? "think" : phase === "won" || phase === "guessing" ? "reveal" : "idle";
+  const coreMode = phase === "thinking" ? "think" : phase === "won" || phase === "guessing" ? "reveal" : "idle";
+  const playing = phase === "asking" || phase === "thinking" || phase === "guessing";
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-background text-foreground">
-      <div className="crt-scanlines fixed inset-0 z-50 opacity-40" />
-      <div className="crt-vignette fixed inset-0 z-40" />
+      <div className="grain fixed inset-0" />
 
-      <div className="anim-flicker relative mx-auto flex max-w-3xl flex-col gap-6 px-4 py-8">
-        <header className="flex items-center justify-between border-b border-border pb-3 font-display text-xl uppercase tracking-[0.3em]">
-          <span className="text-glow">Orb-20 // Psi Lab</span>
-          <button onClick={synth.toggle} className="text-muted-foreground hover:text-primary">
-            Hum: {synth.on ? "ON" : "OFF"}
-          </button>
+      <div className="relative mx-auto flex max-w-2xl flex-col gap-8 px-5 py-6">
+        <header className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <img src={logo.url} alt="Mazaj Coffee Shop" className="h-12 w-12 rounded-full object-cover ring-1 ring-border" />
+            <div className="leading-tight">
+              <p className="font-display text-xl">Mazaj</p>
+              <p className="text-[11px] uppercase tracking-[0.25em] text-muted-foreground">Coffee · Brunch</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 rounded-full glass p-1 text-xs">
+            {(["ar", "fr", "en"] as const).map((l) => (
+              <button
+                key={l}
+                onClick={() => navigate({ search: (p) => ({ ...p, lang: l }) })}
+                className={`rounded-full px-3 py-1.5 transition ${lang === l ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {l === "ar" ? "الدارجة" : l === "fr" ? "FR" : "EN"}
+              </button>
+            ))}
+          </div>
         </header>
 
-        <Orb mode={orbMode} confidence={confidence} />
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2">
+            {table && (
+              <span className="rounded-full glass px-3 py-1 text-foreground">
+                {t.table} {table}
+              </span>
+            )}
+            {orderNames.length > 0 && <span className="truncate">{orderNames.join(" · ")}</span>}
+          </div>
+          <div className="flex items-center gap-3">
+            {lang === "ar" && (
+              <button onClick={() => setLatin((v) => !v)} className="hover:text-foreground">
+                {latin ? "عربي" : "Latin"}
+              </button>
+            )}
+            <button onClick={() => setMenuOpen((v) => !v)} className="hover:text-foreground">{t.menu}</button>
+            <button onClick={sound.toggle} className="hover:text-foreground">
+              {t.sound} {sound.on ? "●" : "○"}
+            </button>
+          </div>
+        </div>
 
-        <section className="min-h-24 text-center">
+        {menuOpen && (
+          <section className="anim-rise glass rounded-2xl p-5 text-sm">
+            {(["hot", "cold", "sweet"] as const).map((cat) => (
+              <div key={cat} className="mb-4 last:mb-0">
+                <h3 className="mb-2 font-display text-lg text-primary">{t[cat]}</h3>
+                <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
+                  {MENU.filter((m) => m.cat === cat).map((m) => (
+                    <li key={m.id} className="flex justify-between gap-2 border-b border-border/50 py-1">
+                      <span>{m[lang]}</span>
+                      <span className="tabular-nums text-muted-foreground">{m.price} DA</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            <p className="mt-3 text-xs text-muted-foreground">{t.hours}</p>
+          </section>
+        )}
+
+        <Core mode={coreMode} confidence={confidence} />
+
+        <section className="min-h-32 text-center">
           {phase === "won" ? (
             <div>
-              <p className="font-display text-xl uppercase tracking-widest text-muted-foreground">
-                Your mind has been read
-              </p>
-              <h1 className="anim-reveal mt-2 font-display text-6xl uppercase text-amber text-glow-amber sm:text-7xl">
-                {reveal}
-              </h1>
-              <p className="mt-3 text-sm text-muted-foreground">
-                Deduced in {questionsAsked} question{questionsAsked === 1 ? "" : "s"}.{" "}
-                {wrong.length > 0 && `${wrong.length} false vision${wrong.length > 1 ? "s" : ""}.`}
-              </p>
+              <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">{t.won}</p>
+              <h1 className="anim-reveal mt-3 font-display text-5xl text-primary sm:text-6xl">{reveal}</h1>
+              <p className="mt-4 text-sm text-muted-foreground">{t.inN(questionsAsked)}</p>
             </div>
           ) : phase === "lost" ? (
-            <div>
-              <h1 className="font-display text-5xl uppercase text-destructive">You have defeated me</h1>
-              <p className="mt-2 text-muted-foreground">Your mind is a fortress. This has not happened in a long time.</p>
+            <div className="anim-rise">
+              <h1 className="font-display text-4xl sm:text-5xl">{t.lost}</h1>
+              <p className="mt-3 text-muted-foreground">{t.lostSub}</p>
             </div>
           ) : phase === "intro" ? (
-            <div>
-              <h1 className="font-display text-6xl uppercase text-glow">The Orb</h1>
-              <p className="mt-2 text-muted-foreground">{comment}</p>
-              <p className="mt-1 text-sm text-muted-foreground">I will know it in twenty questions or fewer.</p>
+            <div className="anim-rise">
+              <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">{t.title}</p>
+              <h1 className="mt-3 font-display text-4xl leading-tight sm:text-5xl">{t.tagline}</h1>
+              <p className="mt-3 text-muted-foreground">{t.sub}</p>
             </div>
           ) : (
-            <div>
-              <p className="font-display text-lg uppercase tracking-widest text-muted-foreground">
-                {phase === "guessing" ? "Vision" : `Query ${Math.min(questionsAsked + 1, 20)} / 20`}
+            <div key={move?.text + phase} className="anim-rise">
+              <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">
+                {phase === "guessing" ? t.vision : `${t.q} ${Math.min(questionsAsked + 1, 20)} / 20`}
               </p>
-              <h1 className="mt-1 font-display text-4xl text-glow sm:text-5xl">
+              <h1 className="mt-3 font-display text-3xl leading-snug sm:text-4xl">
                 {phase === "thinking" ? (
-                  <span className="text-muted-foreground">
-                    Probing<span className="anim-blink">…</span>
-                  </span>
+                  <span className="text-muted-foreground">{t.thinking}…</span>
                 ) : phase === "error" ? (
                   <span className="text-destructive">{error}</span>
                 ) : phase === "guessing" ? (
-                  <span className="text-amber text-glow-amber">Are you thinking of… {move?.text}?</span>
+                  <>
+                    <span className="text-muted-foreground">{t.areYou} </span>
+                    <span className="text-primary">{move?.text}</span>
+                  </>
                 ) : (
                   move?.text
                 )}
               </h1>
-              <p className="mt-3 text-sm italic text-accent">
-                <TypeText text={`> ${comment}`} />
-              </p>
+              {comment && phase !== "error" && (
+                <p className="mx-auto mt-4 max-w-md text-sm italic text-accent">{comment}</p>
+              )}
             </div>
           )}
         </section>
 
-        {phase !== "intro" && <Gauge value={confidence} />}
+        {phase !== "intro" && <Certainty value={confidence} label={t.lock} />}
 
-        <section className="flex flex-wrap justify-center gap-3">
+        <section className="flex flex-wrap justify-center gap-2">
           {(phase === "intro" || phase === "won" || phase === "lost" || phase === "error") && (
-            <RetroButton onClick={start}>{phase === "intro" ? "I have it in mind" : phase === "error" ? "Retry" : "Again"}</RetroButton>
+            <Btn variant="solid" onClick={start}>
+              {phase === "intro" ? t.start : phase === "error" ? t.retry : t.again}
+            </Btn>
           )}
           {phase === "asking" &&
-            ANSWERS.map((a) => (
-              <RetroButton key={a} onClick={() => answer(a)} tone={a === "Yes" || a === "No" ? "primary" : "muted"}>
-                {a}
-              </RetroButton>
+            ANSWER_KEYS.map((a) => (
+              <Btn key={a} onClick={() => answer(a)} variant={a === "Yes" ? "solid" : "ghost"}>
+                {label(a)}
+              </Btn>
             ))}
           {phase === "guessing" && (
             <>
-              <RetroButton tone="amber" onClick={() => answer("Yes")}>Right</RetroButton>
-              <RetroButton onClick={() => answer("No")}>Wrong</RetroButton>
+              <Btn variant="solid" onClick={() => answer("Yes")}>{t.right}</Btn>
+              <Btn onClick={() => answer("No")}>{t.wrong}</Btn>
             </>
           )}
         </section>
 
-        {(phase === "asking" || phase === "thinking" || phase === "guessing") && (
-          <section className="rounded-sm border border-accent/50 bg-card/60 p-4">
+        {playing && (
+          <section className="glass rounded-2xl p-4">
             {!jokerOpen && !jokerUsed && (
-              <button
-                onClick={() => setJokerOpen(true)}
-                className="w-full font-display text-xl uppercase tracking-widest text-accent hover:text-glow-amber"
-              >
-                ◈ Joker: Ask the Orb (once) ◈
+              <button onClick={() => setJokerOpen(true)} className="w-full text-sm tracking-wide text-primary hover:opacity-80">
+                ✦ {t.joker}
               </button>
             )}
             {jokerOpen && !jokerUsed && (
-              <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="flex gap-2">
                 <input
                   autoFocus
                   maxLength={300}
                   value={jokerQ}
                   onChange={(e) => setJokerQ(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && askJoker()}
-                  placeholder="Type your question to the Orb…"
-                  className="flex-1 rounded-sm border border-accent/60 bg-background px-3 py-2 text-accent outline-none placeholder:text-muted-foreground focus:border-accent"
+                  placeholder={t.jokerPh}
+                  className="flex-1 rounded-full border border-input bg-transparent px-4 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
                 />
-                <RetroButton tone="amber" onClick={askJoker} disabled={jokerBusy}>
-                  {jokerBusy ? "…" : "Ask"}
-                </RetroButton>
+                <Btn variant="solid" onClick={askJoker} disabled={jokerBusy}>
+                  {jokerBusy ? "…" : t.ask}
+                </Btn>
               </div>
             )}
             {jokerUsed && (
-              <div>
-                <p className="text-xs uppercase tracking-widest text-muted-foreground">You asked: {jokerQ}</p>
-                <p className="mt-2 text-accent text-glow-amber">
-                  <TypeText text={jokerA} />
-                </p>
+              <div className="anim-rise">
+                <p className="text-xs text-muted-foreground">{t.youAsked}: {jokerQ}</p>
+                <p className="mt-2 font-display text-xl leading-snug text-foreground">{jokerA}</p>
               </div>
             )}
           </section>
@@ -428,14 +435,16 @@ function Game() {
 
         {history.length > 0 && (
           <details className="text-sm text-muted-foreground">
-            <summary className="cursor-pointer font-display text-lg uppercase tracking-widest">
-              Session log ({history.length})
+            <summary className="cursor-pointer text-xs uppercase tracking-[0.25em]">
+              {t.log} ({history.length})
             </summary>
-            <ol className="mt-2 space-y-1">
+            <ol className="mt-3 space-y-1">
               {history.map((h, i) => (
-                <li key={i} className="flex justify-between gap-4 border-b border-border/40 py-1">
-                  <span>{h.kind === "guess" ? `Guess: ${h.text}` : h.text}</span>
-                  <span className="text-primary">{h.answer}</span>
+                <li key={i} className="flex justify-between gap-4 border-b border-border/50 py-2">
+                  <span className="text-foreground/90">{h.text}</span>
+                  <span className="shrink-0 text-primary">
+                    {label(h.answer as (typeof ANSWER_KEYS)[number])}
+                  </span>
                 </li>
               ))}
             </ol>
