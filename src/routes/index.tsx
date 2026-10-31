@@ -8,7 +8,7 @@ import { ANSWER_KEYS, LATIN_ANSWERS, MENU, T, parseOrder, type Lang } from "@/li
 import logo from "@/assets/mazaj-logo.png.asset.json";
 
 const search = z.object({
-  table: fallback(z.string(), "").default(""),
+  table: fallback(z.union([z.string(), z.number()]).transform(String), "").default(""),
   items: fallback(z.string(), "").default(""),
   lang: fallback(z.string(), "").default(""),
 });
@@ -170,7 +170,7 @@ function Game() {
   const lang: Lang = q.lang === "ar" || q.lang === "fr" || q.lang === "en" ? q.lang : "fr";
   const [latin, setLatin] = useState(false);
   const t = T[lang];
-  const table = q.table.slice(0, 20) || null;
+  const table = String(q.table).slice(0, 20) || null;
   const order = useMemo(() => parseOrder(q.items), [q.items]);
   const orderNames = order.map((m) => m[lang]);
   const ctx = { lang, latin: lang === "ar" && latin, table, items: order.map((m) => m.fr) };
