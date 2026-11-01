@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { EXPIRED_MSG, remainingMs } from "./session";
 
-function guard(d: { ts?: number; ttl?: number }) {
+function guard(d: { ts?: number | undefined; ttl?: number | undefined }) {
   if (remainingMs(d.ts, d.ttl) <= 0) throw new Error(EXPIRED_MSG);
 }
 

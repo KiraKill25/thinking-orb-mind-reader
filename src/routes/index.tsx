@@ -117,7 +117,7 @@ function useSound() {
     let bar = 0;
     const playBar = () => {
       const t0 = c.currentTime + 0.1;
-      const ch = PROGRESSION[bar % PROGRESSION.length];
+      const ch = PROGRESSION[bar % PROGRESSION.length]!;
       key(c, input, ch.bass, t0, 0.22, 6);
       key(c, input, ch.bass + 12, t0 + beat * 0.02, 0.1, 5);
       ch.arp.forEach((n, i) => key(c, input, n, t0 + i * beat, 0.07 + Math.random() * 0.03, 3));
