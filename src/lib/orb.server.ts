@@ -1,37 +1,17 @@
-import { createOpenAI } from "@ai-sdk/openai";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { Output, streamText } from "ai";
 import { z } from "zod";
 import { MENU } from "./mazaj-menu";
 
-const MODEL = "openai/gpt-6-astra";
+const MODEL = "gemini-flash-latest";
 
-function provider() {
-  const apiKey = process.env["LOVABLE_API_KEY"];
+function model() {
+  const apiKey = process.env["GEMINI_API_KEY"];
   if (!apiKey) throw new Error("Mazaj is resting (missing AI key).");
-  let runId: string | undefined;
-  return createOpenAI({
-    baseURL: "https://ai.gateway.lovable.dev/v1",
-    apiKey,
-    headers: { "Lovable-API-Key": apiKey, "X-Lovable-AIG-SDK": "vercel-ai-sdk" },
-    fetch: async (input, init) => {
-      const headers = new Headers(init?.headers);
-      if (runId) headers.set("X-Lovable-AIG-Run-ID", runId);
-      const res = await fetch(input, { ...init, headers });
-      runId ??= res.headers.get("X-Lovable-AIG-Run-ID") ?? undefined;
-      return res;
-    },
-  });
+  return createGoogleGenerativeAI({ apiKey })(MODEL);
 }
 
-const opts = {
-  openai: {
-    forceReasoning: true,
-    reasoningEffort: "low",
-    reasoningSummary: "auto",
-    store: false,
-    include: ["reasoning.encrypted_content"],
-  },
-} as const;
+const opts = { google: { thinkingConfig: { thinkingBudget: 0 } } } as const;
 
 export type Turn = { kind: "question" | "guess"; text: string; answer: string };
 type Ctx = { lang: "ar" | "fr" | "en"; latin: boolean; table: string | null; items: string[] };
@@ -65,8 +45,8 @@ export async function nextTurn(d: Ctx & { history: Turn[]; wrongGuesses: string[
     : "(no questions yet)";
   const mustGuess = d.questionsAsked >= 20;
   const result = streamText({
-    model: provider().responses(MODEL),
-    instructions: `${voice(d)}\n\nGame: 20 Questions like Radica's 20Q. The player thinks of anything (object, animal, person, place, food, concept). Answers are Yes, No, Sometimes, Doubtful, Irrelevant. Ask maximally informative yes/no questions, broad first then narrowing like binary search. Questions themselves must stay genuinely useful for deduction; the menu flavour belongs mainly in commentary (a question may playfully reference the table only if it is still informative). Treat answers probabilistically. Only guess early when confidence >= 85. Never repeat a question or a rejected guess. Guesses must be one specific thing.`,
+    model: model(),
+    system: `${voice(d)}\n\nGame: 20 Questions like Radica's 20Q. The player thinks of anything (object, animal, person, place, food, concept). Answers are Yes, No, Sometimes, Doubtful, Irrelevant. Ask maximally informative yes/no questions, broad first then narrowing like binary search. Questions themselves must stay genuinely useful for deduction; the menu flavour belongs mainly in commentary (a question may playfully reference the table only if it is still informative). Treat answers probabilistically. Only guess early when confidence >= 85. Never repeat a question or a rejected guess. Guesses must be one specific thing.`,
     messages: [
       {
         role: "user",
@@ -84,8 +64,8 @@ export async function nextTurn(d: Ctx & { history: Turn[]; wrongGuesses: string[
 
 export async function jokerAnswer(d: Ctx & { history: Turn[]; question: string }) {
   const result = streamText({
-    model: provider().responses(MODEL),
-    instructions: `${voice(d)}\n\nThe guest used their single Joker to question you directly. Reply in 1-3 short sentences: enigmatic, witty, a little unsettling, hinting you already sense their secret (draw subtle hints from the transcript) without revealing your guess. You may reference their order. No emojis.`,
+    model: model(),
+    system: `${voice(d)}\n\nThe guest used their single Joker to question you directly. Reply in 1-3 short sentences: enigmatic, witty, a little unsettling, hinting you already sense their secret (draw subtle hints from the transcript) without revealing your guess. You may reference their order. No emojis.`,
     messages: [
       {
         role: "user",
