@@ -249,7 +249,7 @@ function Locked({ lang, latin }: { lang: Lang; latin: boolean }) {
 
 /* ---------- Game ---------- */
 function Game() {
-  const q = Route.useSearch();
+  const q = Route.useSearch() as { table: string; items: string; lang: string; ts: number; ttl: number };
   const navigate = useNavigate({ from: "/" });
   const next = useServerFn(orbNextTurn);
   const joker = useServerFn(orbJoker);
@@ -307,7 +307,10 @@ function Game() {
       setPhase(m.type === "guess" ? "guessing" : "asking");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
-      if (msg.includes(EXPIRED_MSG)) return setLeft(0);
+      if (msg.includes(EXPIRED_MSG)) {
+        setLeft(0);
+        return;
+      }
       setError(BREAK[lang]);
       setPhase("error");
     }
