@@ -5,12 +5,15 @@ import { z } from "zod";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { orbJoker, orbNextTurn } from "@/lib/orb.functions";
 import { ANSWER_KEYS, LATIN_ANSWERS, MENU, T, parseOrder, type Lang } from "@/lib/mazaj-menu";
+import { EXPIRED_MSG, remainingMs } from "@/lib/session";
 import logo from "@/assets/mazaj-logo.png.asset.json";
 
 const search = z.object({
   table: fallback(z.union([z.string(), z.number()]).transform(String), "").default(""),
   items: fallback(z.string(), "").default(""),
   lang: fallback(z.string(), "").default(""),
+  ts: fallback(z.coerce.number(), 0).default(0),
+  ttl: fallback(z.coerce.number(), 60).default(60),
 });
 
 export const Route = createFileRoute("/")({
@@ -30,51 +33,112 @@ type Turn = { kind: "question" | "guess"; text: string; answer: string };
 type Move = { type: "question" | "guess"; text: string; commentary: string; confidence: number };
 type Phase = "intro" | "thinking" | "asking" | "guessing" | "won" | "lost" | "error";
 
-/* ---------- Sound: soft warm tones ---------- */
+/* ---------- Sound: a slow, mysterious café piano ---------- */
+const NOTE = (n: number) => 440 * Math.pow(2, (n - 69) / 12);
+// A minor nocturne: Am – Fmaj7 – Dm9 – E7sus, played as gentle arpeggios
+const PROGRESSION = [
+  { bass: 45, arp: [57, 60, 64, 69, 64, 60] },
+  { bass: 41, arp: [57, 60, 64, 65, 64, 60] },
+  { bass: 38, arp: [57, 62, 65, 69, 64, 62] },
+  { bass: 40, arp: [56, 59, 62, 64, 62, 59] },
+];
+const MELODY = [76, null, 74, 72, null, 71, null, 72, 69, null, null, null];
+
 function useSound() {
   const ctx = useRef<AudioContext | null>(null);
-  const pad = useRef<{ g: GainNode; o: OscillatorNode[] } | null>(null);
+  const bus = useRef<GainNode | null>(null);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [on, setOn] = useState(false);
+
+  function key(c: AudioContext, out: AudioNode, midi: number, t: number, vel = 0.25, len = 3.5) {
+    const f = NOTE(midi);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vel, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(vel * 0.35, t + 0.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    const lp = c.createBiquadFilter();
+    lp.type = "lowpass";
+    lp.frequency.setValueAtTime(Math.min(6000, f * 8), t);
+    lp.frequency.exponentialRampToValueAtTime(Math.max(300, f * 2), t + 1.2);
+    lp.connect(g).connect(out);
+    // piano-ish timbre: fundamental + soft harmonics, slightly detuned
+    [
+      [1, "triangle", 1],
+      [2, "sine", 0.35],
+      [3, "sine", 0.12],
+      [1.003, "sine", 0.4],
+    ].forEach(([mult, type, amp]) => {
+      const o = c.createOscillator();
+      const og = c.createGain();
+      o.type = type as OscillatorType;
+      o.frequency.value = f * (mult as number);
+      og.gain.value = amp as number;
+      o.connect(og).connect(lp);
+      o.start(t);
+      o.stop(t + len + 0.1);
+    });
+  }
+
+  function makeBus(c: AudioContext) {
+    const master = c.createGain();
+    master.gain.value = 0;
+    // soft room reverb from a generated impulse
+    const len = c.sampleRate * 3.2;
+    const ir = c.createBuffer(2, len, c.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = ir.getChannelData(ch);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
+    }
+    const verb = c.createConvolver();
+    verb.buffer = ir;
+    const wet = c.createGain();
+    wet.gain.value = 0.45;
+    const input = c.createGain();
+    input.connect(master);
+    input.connect(verb).connect(wet).connect(master);
+    master.connect(c.destination);
+    return { master, input };
+  }
+
   const toggle = () => {
     const c = (ctx.current ??= new AudioContext());
-    if (pad.current) {
-      const p = pad.current;
-      p.g.gain.linearRampToValueAtTime(0, c.currentTime + 0.8);
-      setTimeout(() => p.o.forEach((o) => o.stop()), 900);
-      pad.current = null;
+    if (timer.current) {
+      clearInterval(timer.current);
+      timer.current = null;
+      bus.current?.gain.linearRampToValueAtTime(0, c.currentTime + 1.5);
       setOn(false);
       return;
     }
-    const g = c.createGain();
-    g.gain.value = 0;
-    const f = c.createBiquadFilter();
-    f.type = "lowpass";
-    f.frequency.value = 600;
-    const os = [110, 164.8, 220.5].map((fr) => {
-      const o = c.createOscillator();
-      o.type = "sine";
-      o.frequency.value = fr;
-      o.connect(f);
-      o.start();
-      return o;
-    });
-    f.connect(g).connect(c.destination);
-    g.gain.linearRampToValueAtTime(0.04, c.currentTime + 2);
-    pad.current = { g, o: os };
+    const { master, input } = makeBus(c);
+    bus.current = input;
+    master.gain.linearRampToValueAtTime(0.5, c.currentTime + 2);
+    const beat = 0.62; // slow, ~48 bpm feel with 8ths
+    let bar = 0;
+    const playBar = () => {
+      const t0 = c.currentTime + 0.1;
+      const ch = PROGRESSION[bar % PROGRESSION.length];
+      key(c, input, ch.bass, t0, 0.22, 6);
+      key(c, input, ch.bass + 12, t0 + beat * 0.02, 0.1, 5);
+      ch.arp.forEach((n, i) => key(c, input, n, t0 + i * beat, 0.07 + Math.random() * 0.03, 3));
+      // sparse melody every other bar
+      if (bar % 2 === 1) {
+        MELODY.slice((bar % 4) * 3, (bar % 4) * 3 + 6).forEach((n, i) => n && key(c, input, n, t0 + i * beat + beat / 2, 0.1, 3.5));
+      }
+      bar++;
+    };
+    playBar();
+    timer.current = setInterval(playBar, beat * 6 * 1000);
     setOn(true);
   };
-  const chime = (freq = 880, dur = 0.5) => {
-    if (!on || !ctx.current) return;
-    const c = ctx.current;
-    const o = c.createOscillator();
-    const g = c.createGain();
-    o.type = "sine";
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(0.06, c.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
-    o.connect(g).connect(c.destination);
-    o.start();
-    o.stop(c.currentTime + dur);
+
+  useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
+
+  // a single soft piano note for transitions
+  const chime = (freq = 880, dur = 2.5) => {
+    if (!on || !ctx.current || !bus.current) return;
+    const midi = Math.round(69 + 12 * Math.log2(freq / 440));
+    key(ctx.current, bus.current, midi, ctx.current.currentTime + 0.02, 0.12, dur + 1);
   };
   return { on, toggle, chime };
 }
@@ -159,6 +223,30 @@ function Btn({
   );
 }
 
+const BREAK = {
+  ar: "مزاج راه يرتاح شوية ويشرب قهوتو… عاود بعد لحظة.",
+  fr: "Mazaj prend une petite pause café… réessayez dans un instant.",
+  en: "Mazaj is taking a short coffee break… try again in a moment.",
+} as const;
+
+const LOCK = {
+  ar: { title: "الوقت كمل", body: "الـ60 دقيقة تاعكم خلصت. طلبو من السرفور يجددلكم الكود وزيدو العبو مع مزاج!", latin: "El wa9t kmel — tlbo mel serveur ydjeddedlkom el code." },
+  fr: { title: "Le temps est écoulé", body: "Vos 60 minutes de jeu sont terminées. Demandez au serveur de renouveler votre accès pour continuer avec Mazaj !", latin: "" },
+  en: { title: "Time's up", body: "Your 60 minutes of play are over. Ask your waiter to renew your access and keep playing with Mazaj!", latin: "" },
+} as const;
+
+function Locked({ lang, latin }: { lang: Lang; latin: boolean }) {
+  const l = LOCK[lang];
+  return (
+    <section className="glass mx-auto flex max-w-md flex-col items-center gap-4 rounded-3xl p-8 text-center">
+      <img src={logo.url} alt="Mazaj Coffee Shop" className="h-24 w-24 rounded-full object-cover ring-1 ring-border" />
+      <h2 className="font-display text-3xl">{l.title}</h2>
+      <p className="text-muted-foreground">{lang === "ar" && latin ? l.latin : l.body}</p>
+      <p className="text-xs uppercase tracking-[0.25em] text-primary">Mazaj · مزاج</p>
+    </section>
+  );
+}
+
 /* ---------- Game ---------- */
 function Game() {
   const q = Route.useSearch();
@@ -173,7 +261,7 @@ function Game() {
   const table = String(q.table).slice(0, 20) || null;
   const order = useMemo(() => parseOrder(q.items), [q.items]);
   const orderNames = order.map((m) => m[lang]);
-  const ctx = { lang, latin: lang === "ar" && latin, table, items: order.map((m) => m.fr) };
+  const ctx = { lang, latin: lang === "ar" && latin, table, items: order.map((m) => m.fr), ts: q.ts || undefined, ttl: q.ttl || undefined };
   const label = (a: (typeof ANSWER_KEYS)[number]) => (lang === "ar" && latin ? LATIN_ANSWERS[a] : t.answers[a]);
 
   const [phase, setPhase] = useState<Phase>("intro");
@@ -190,6 +278,14 @@ function Game() {
   const [jokerBusy, setJokerBusy] = useState(false);
   const [reveal, setReveal] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [left, setLeft] = useState<number | null>(null);
+  useEffect(() => {
+    const tick = () => setLeft(remainingMs(q.ts, q.ttl));
+    tick();
+    const id = setInterval(tick, 15_000);
+    return () => clearInterval(id);
+  }, [q.ts, q.ttl]);
+  const expired = left === 0;
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -210,7 +306,9 @@ function Game() {
       sound.chime(m.type === "guess" ? 523 : 784);
       setPhase(m.type === "guess" ? "guessing" : "asking");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "…");
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes(EXPIRED_MSG)) return setLeft(0);
+      setError(BREAK[lang]);
       setPhase("error");
     }
   }
@@ -257,7 +355,9 @@ function Game() {
       setJokerA(r.text);
       setJokerUsed(true);
     } catch (e) {
-      setJokerA(e instanceof Error ? e.message : "…");
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes(EXPIRED_MSG)) setLeft(0);
+      else setJokerA(BREAK[lang]);
     } finally {
       setJokerBusy(false);
     }
