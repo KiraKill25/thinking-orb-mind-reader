@@ -3,7 +3,7 @@ import { Output, streamText } from "ai";
 import { z } from "zod";
 import { MENU } from "./mazaj-menu";
 
-const MODEL = "gemini-2.5-flash";
+const MODEL = "gemini-flash-latest";
 
 function model() {
   const apiKey = process.env["GEMINI_API_KEY"];
