@@ -345,7 +345,8 @@ function Game() {
       const w = [...wrong, move.text];
       setWrong(w);
       setConfidence((c) => Math.max(10, c - 30));
-      return think(h, w);
+      void think(h, w);
+      return;
     }
     think(h, wrong);
   }
