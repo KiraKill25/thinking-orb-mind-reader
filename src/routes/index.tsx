@@ -392,6 +392,16 @@ function Game() {
           </div>
         </header>
 
+        {expired ? (
+          <Locked lang={lang} latin={latin} />
+        ) : (
+        <>
+        {left !== null && left > 0 && (
+          <p className="-mb-4 text-center text-[11px] uppercase tracking-[0.25em] text-muted-foreground">
+            {lang === "ar" ? `باقي ${Math.ceil(left / 60000)} دقيقة` : lang === "fr" ? `${Math.ceil(left / 60000)} min restantes` : `${Math.ceil(left / 60000)} min left`}
+          </p>
+        )}
+
         <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <div className="flex flex-wrap items-center gap-2">
             {table && (
@@ -549,6 +559,8 @@ function Game() {
               ))}
             </ol>
           </details>
+        )}
+        </>
         )}
       </div>
     </main>
