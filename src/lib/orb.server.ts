@@ -26,7 +26,7 @@ async function withFallback<T>(run: (model: ReturnType<ReturnType<typeof google>
   throw last;
 }
 
-const opts = { google: { thinkingConfig: { thinkingBudget: 0 } } } as const;
+const opts = {} as const;
 
 export type Turn = { kind: "question" | "guess"; text: string; answer: string };
 type Ctx = { lang: "ar" | "fr" | "en"; latin: boolean; table: string | null; items: string[] };
