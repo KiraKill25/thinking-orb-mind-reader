@@ -3,15 +3,30 @@ import { Output, streamText } from "ai";
 import { z } from "zod";
 import { MENU } from "./mazaj-menu";
 
-const MODEL = "gemini-flash-latest";
+// Tried in order; if Google is busy or retires one, the next takes over.
+const MODELS = ["gemini-flash-lite-latest", "gemini-flash-latest"];
 
-function model() {
+function google() {
   const apiKey = process.env["GEMINI_API_KEY"];
   if (!apiKey) throw new Error("Mazaj is resting (missing AI key).");
-  return createGoogleGenerativeAI({ apiKey })(MODEL);
+  return createGoogleGenerativeAI({ apiKey });
 }
 
-const opts = { google: { thinkingConfig: { thinkingBudget: 0 } } } as const;
+async function withFallback<T>(run: (model: ReturnType<ReturnType<typeof google>>) => Promise<T>): Promise<T> {
+  const g = google();
+  let last: unknown;
+  for (const m of MODELS) {
+    try {
+      return await run(g(m));
+    } catch (e) {
+      last = e;
+      console.error(`Gemini ${m} failed:`, e instanceof Error ? e.message.slice(0, 200) : e);
+    }
+  }
+  throw last;
+}
+
+const opts = {} as const;
 
 export type Turn = { kind: "question" | "guess"; text: string; answer: string };
 type Ctx = { lang: "ar" | "fr" | "en"; latin: boolean; table: string | null; items: string[] };
@@ -44,8 +59,10 @@ export async function nextTurn(d: Ctx & { history: Turn[]; wrongGuesses: string[
     ? d.history.map((h, i) => `${i + 1}. [${h.kind}] ${h.text} -> ${h.answer}`).join("\n")
     : "(no questions yet)";
   const mustGuess = d.questionsAsked >= 20;
+  const out = await withFallback(async (model) => {
   const result = streamText({
-    model: model(),
+    model,
+    maxRetries: 1,
     system: `${voice(d)}\n\nGame: 20 Questions like Radica's 20Q. The player thinks of anything (object, animal, person, place, food, concept). Answers are Yes, No, Sometimes, Doubtful, Irrelevant. Ask maximally informative yes/no questions, broad first then narrowing like binary search. Questions themselves must stay genuinely useful for deduction; the menu flavour belongs mainly in commentary (a question may playfully reference the table only if it is still informative). Treat answers probabilistically. Only guess early when confidence >= 85. Never repeat a question or a rejected guess. Guesses must be one specific thing.`,
     messages: [
       {
@@ -56,15 +73,18 @@ export async function nextTurn(d: Ctx & { history: Turn[]; wrongGuesses: string[
     output: Output.object({ schema: turnSchema }),
     providerOptions: opts,
   });
-  const out = await result.output;
+  return await result.output;
+  });
   if (mustGuess) out.type = "guess";
   out.confidence = Math.max(0, Math.min(100, Math.round(out.confidence)));
   return out;
 }
 
 export async function jokerAnswer(d: Ctx & { history: Turn[]; question: string }) {
+  return withFallback(async (model) => {
   const result = streamText({
-    model: model(),
+    model,
+    maxRetries: 1,
     system: `${voice(d)}\n\nThe guest used their single Joker to question you directly. Reply in 1-3 short sentences: enigmatic, witty, a little unsettling, hinting you already sense their secret (draw subtle hints from the transcript) without revealing your guess. You may reference their order. No emojis.`,
     messages: [
       {
@@ -75,4 +95,5 @@ export async function jokerAnswer(d: Ctx & { history: Turn[]; question: string }
     providerOptions: opts,
   });
   return await result.text;
+  });
 }
