@@ -294,7 +294,7 @@ function Game() {
     const id = setInterval(tick, 15_000);
     return () => clearInterval(id);
   }, [passTs, q.ttl]);
-  const expired = left === 0 && !testTs && false === (typeof window !== "undefined" && window.location.hostname.startsWith("id-preview--") && testTs === 0 && remainingMs(q.ts, q.ttl) === 0 && false) ;
+  const expired = left === 0;
 
   useEffect(() => {
     document.documentElement.lang = lang;
