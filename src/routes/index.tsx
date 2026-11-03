@@ -68,7 +68,7 @@ function useSound() {
       [1, 1],
       [2, 0.18],
       [3, 0.05],
-    ].forEach(([mult, amp]) => {
+    ] as const).forEach(([mult, amp]) => {
       const o = c.createOscillator();
       const og = c.createGain();
       o.type = "sine";
