@@ -267,12 +267,19 @@ function Locked({ lang, latin }: { lang: Lang; latin: boolean }) {
   );
 }
 
+const SECRET = {
+  ar: { q: "قولي بالصح، واش كنت تخمم فيه؟", ph: "اكتب الكلمة تاعك…", btn: "كشف" },
+  fr: { q: "Avouez… à quoi pensiez-vous ?", ph: "Votre mot secret…", btn: "Révéler" },
+  en: { q: "Confess… what were you thinking of?", ph: "Your secret word…", btn: "Reveal" },
+} as const;
+
 /* ---------- Game ---------- */
 function Game() {
   const q = Route.useSearch() as { table: string; items: string; lang: string; ts: number; ttl: number };
   const navigate = useNavigate({ from: "/" });
   const next = useServerFn(orbNextTurn);
   const joker = useServerFn(orbJoker);
+  const react = useServerFn(orbReactSecret);
   const sound = useSound();
 
   const lang: Lang = q.lang === "ar" || q.lang === "fr" || q.lang === "en" ? q.lang : "fr";
@@ -306,6 +313,9 @@ function Game() {
   const [jokerA, setJokerA] = useState("");
   const [jokerBusy, setJokerBusy] = useState(false);
   const [reveal, setReveal] = useState("");
+  const [secret, setSecret] = useState("");
+  const [secretReply, setSecretReply] = useState("");
+  const [secretBusy, setSecretBusy] = useState(false);
   const [left, setLeft] = useState<number | null>(null);
   useEffect(() => {
     const tick = () => setLeft(remainingMs(passTs, q.ttl));
@@ -354,6 +364,8 @@ function Game() {
     setJokerA("");
     setJokerQ("");
     setReveal("");
+    setSecret("");
+    setSecretReply("");
     setComment("");
     think([], []);
   }
@@ -377,6 +389,22 @@ function Game() {
       return;
     }
     think(h, wrong);
+  }
+
+  async function revealSecret() {
+    if (!secret.trim() || secretBusy) return;
+    setSecretBusy(true);
+    try {
+      const r = await react({ data: { history, wrongGuesses: wrong, secret: secret.trim(), ...ctx } });
+      setSecretReply(r.text);
+      sound.chime(392, 1.4);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg.includes(EXPIRED_MSG)) setLeft(0);
+      else setSecretReply(BREAK[lang]);
+    } finally {
+      setSecretBusy(false);
+    }
   }
 
   async function askJoker() {
@@ -469,6 +497,29 @@ function Game() {
             <div className="anim-rise">
               <h1 className="font-display text-4xl sm:text-5xl">{t.lost}</h1>
               <p className="mt-3 text-muted-foreground">{t.lostSub}</p>
+              {!secretReply ? (
+                <div className="mx-auto mt-6 max-w-md">
+                  <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">{SECRET[lang].q}</p>
+                  <div className="mt-3 flex gap-2">
+                    <input
+                      maxLength={120}
+                      value={secret}
+                      onChange={(e) => setSecret(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && revealSecret()}
+                      placeholder={SECRET[lang].ph}
+                      className="flex-1 rounded-full border border-input bg-transparent px-4 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-primary"
+                    />
+                    <Btn variant="solid" onClick={revealSecret} disabled={secretBusy}>
+                      {secretBusy ? "…" : SECRET[lang].btn}
+                    </Btn>
+                  </div>
+                </div>
+              ) : (
+                <div className="anim-reveal mx-auto mt-6 max-w-md">
+                  <p className="text-xs uppercase tracking-[0.3em] text-muted-foreground">{secret}</p>
+                  <p className="mt-3 font-display text-xl leading-snug text-accent">{secretReply}</p>
+                </div>
+              )}
             </div>
           ) : phase === "intro" ? (
             <div className="anim-rise">
