@@ -4,7 +4,7 @@ import { zodValidator, fallback } from "@tanstack/zod-adapter";
 import { z } from "zod";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { orbJoker, orbNextTurn } from "@/lib/orb.functions";
-import { ANSWER_KEYS, LATIN_ANSWERS, MENU, T, parseOrder, type Lang } from "@/lib/mazaj-menu";
+import { ANSWER_KEYS, LATIN_ANSWERS, T, parseOrder, type Lang } from "@/lib/mazaj-menu";
 import { EXPIRED_MSG, remainingMs } from "@/lib/session";
 import logo from "@/assets/mazaj-logo.png.asset.json";
 
