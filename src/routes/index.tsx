@@ -64,7 +64,7 @@ function useSound() {
     lp.frequency.setValueAtTime(Math.min(3200, f * 5), t);
     lp.frequency.exponentialRampToValueAtTime(Math.max(400, f * 1.5), t + 1.5);
     lp.connect(g).connect(out);
-    [
+    ([
       [1, 1],
       [2, 0.18],
       [3, 0.05],
