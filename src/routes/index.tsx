@@ -50,85 +50,105 @@ function useSound() {
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [on, setOn] = useState(false);
 
+  // Soft, warm piano voice: pure sine partials, gentle attack, long smooth release (no buzz, no clicks)
   function key(c: AudioContext, out: AudioNode, midi: number, t: number, vel = 0.25, len = 3.5) {
     const f = NOTE(midi);
     const g = c.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(vel, t + 0.008);
-    g.gain.exponentialRampToValueAtTime(vel * 0.35, t + 0.4);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vel, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(vel * 0.4, t + 0.9);
     g.gain.exponentialRampToValueAtTime(0.0001, t + len);
     const lp = c.createBiquadFilter();
     lp.type = "lowpass";
-    lp.frequency.setValueAtTime(Math.min(6000, f * 8), t);
-    lp.frequency.exponentialRampToValueAtTime(Math.max(300, f * 2), t + 1.2);
+    lp.Q.value = 0.3;
+    lp.frequency.setValueAtTime(Math.min(3200, f * 5), t);
+    lp.frequency.exponentialRampToValueAtTime(Math.max(400, f * 1.5), t + 1.5);
     lp.connect(g).connect(out);
-    // piano-ish timbre: fundamental + soft harmonics, slightly detuned
     [
-      [1, "triangle", 1],
-      [2, "sine", 0.35],
-      [3, "sine", 0.12],
-      [1.003, "sine", 0.4],
-    ].forEach(([mult, type, amp]) => {
+      [1, 1],
+      [2, 0.18],
+      [3, 0.05],
+    ].forEach(([mult, amp]) => {
       const o = c.createOscillator();
       const og = c.createGain();
-      o.type = type as OscillatorType;
-      o.frequency.value = f * (mult as number);
-      og.gain.value = amp as number;
+      o.type = "sine";
+      o.frequency.value = f * mult;
+      og.gain.value = amp;
       o.connect(og).connect(lp);
       o.start(t);
-      o.stop(t + len + 0.1);
+      o.stop(t + len + 0.2);
     });
   }
 
   function makeBus(c: AudioContext) {
     const master = c.createGain();
-    master.gain.value = 0;
-    // soft room reverb from a generated impulse
-    const len = c.sampleRate * 3.2;
+    master.gain.value = 0.0001;
+    // Smooth, decaying reverb tail: low-passed and smoothed noise so there is no hiss or crackle
+    const len = Math.floor(c.sampleRate * 3);
     const ir = c.createBuffer(2, len, c.sampleRate);
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
+      let s = 0;
+      for (let i = 0; i < len; i++) {
+        s = s * 0.97 + (Math.random() * 2 - 1) * 0.03; // heavy smoothing removes grain
+        d[i] = s * 6 * Math.pow(1 - i / len, 3);
+      }
     }
     const verb = c.createConvolver();
     verb.buffer = ir;
+    const tone = c.createBiquadFilter();
+    tone.type = "lowpass";
+    tone.frequency.value = 2500;
     const wet = c.createGain();
-    wet.gain.value = 0.45;
+    wet.gain.value = 0.35;
     const input = c.createGain();
+    const comp = c.createDynamicsCompressor();
+    comp.threshold.value = -18;
+    comp.ratio.value = 3;
     input.connect(master);
-    input.connect(verb).connect(wet).connect(master);
-    master.connect(c.destination);
+    input.connect(verb).connect(tone).connect(wet).connect(master);
+    master.connect(comp).connect(c.destination);
     return { master, input };
   }
 
   const toggle = () => {
     const c = (ctx.current ??= new AudioContext());
+    void c.resume();
     if (timer.current) {
       clearInterval(timer.current);
       timer.current = null;
-      bus.current?.gain.linearRampToValueAtTime(0, c.currentTime + 1.5);
+      const m = bus.current;
+      if (m) {
+        m.gain.setTargetAtTime(0.0001, c.currentTime, 0.5);
+      }
       setOn(false);
       return;
     }
     const { master, input } = makeBus(c);
-    bus.current = input;
-    master.gain.linearRampToValueAtTime(0.5, c.currentTime + 2);
-    const beat = 0.62; // slow, ~48 bpm feel with 8ths
+    bus.current = master;
+    master.gain.setTargetAtTime(0.45, c.currentTime, 0.8);
+    (master as GainNode & { _in?: GainNode })._in = input;
+    const beat = 0.7;
+    const barLen = beat * 6;
     let bar = 0;
-    const playBar = () => {
-      const t0 = c.currentTime + 0.1;
-      const ch = PROGRESSION[bar % PROGRESSION.length]!;
-      key(c, input, ch.bass, t0, 0.22, 6);
-      key(c, input, ch.bass + 12, t0 + beat * 0.02, 0.1, 5);
-      ch.arp.forEach((n, i) => key(c, input, n, t0 + i * beat, 0.07 + Math.random() * 0.03, 3));
-      // sparse melody every other bar
-      if (bar % 2 === 1) {
-        MELODY.slice((bar % 4) * 3, (bar % 4) * 3 + 6).forEach((n, i) => n && key(c, input, n, t0 + i * beat + beat / 2, 0.1, 3.5));
+    // Look-ahead scheduling on the audio clock for seamless, drift-free flow
+    let nextBar = c.currentTime + 0.2;
+    const schedule = () => {
+      while (nextBar < c.currentTime + barLen * 1.5) {
+        const t0 = nextBar;
+        const ch = PROGRESSION[bar % PROGRESSION.length]!;
+        key(c, input, ch.bass, t0, 0.16, barLen * 1.6);
+        key(c, input, ch.bass + 12, t0 + 0.04, 0.07, barLen * 1.4);
+        ch.arp.forEach((n, i) => key(c, input, n, t0 + i * beat + (i ? 0.015 : 0), 0.06 + (i % 2 ? 0 : 0.015), 4));
+        if (bar % 2 === 1) {
+          MELODY.slice((bar % 4) * 3, (bar % 4) * 3 + 6).forEach((n, i) => n && key(c, input, n, t0 + i * beat + beat / 2, 0.08, 4.5));
+        }
+        bar++;
+        nextBar += barLen;
       }
-      bar++;
     };
-    playBar();
-    timer.current = setInterval(playBar, beat * 6 * 1000);
+    schedule();
+    timer.current = setInterval(schedule, 500);
     setOn(true);
   };
 
@@ -286,7 +306,6 @@ function Game() {
   const [jokerA, setJokerA] = useState("");
   const [jokerBusy, setJokerBusy] = useState(false);
   const [reveal, setReveal] = useState("");
-  const [menuOpen, setMenuOpen] = useState(false);
   const [left, setLeft] = useState<number | null>(null);
   useEffect(() => {
     const tick = () => setLeft(remainingMs(passTs, q.ttl));
@@ -430,31 +449,12 @@ function Game() {
                 {latin ? "عربي" : "Latin"}
               </button>
             )}
-            <button onClick={() => setMenuOpen((v) => !v)} className="hover:text-foreground">{t.menu}</button>
             <button onClick={sound.toggle} className="hover:text-foreground">
               {t.sound} {sound.on ? "●" : "○"}
             </button>
           </div>
         </div>
 
-        {menuOpen && (
-          <section className="anim-rise glass rounded-2xl p-5 text-sm">
-            {(["hot", "cold", "sweet"] as const).map((cat) => (
-              <div key={cat} className="mb-4 last:mb-0">
-                <h3 className="mb-2 font-display text-lg text-primary">{t[cat]}</h3>
-                <ul className="grid gap-x-6 gap-y-1 sm:grid-cols-2">
-                  {MENU.filter((m) => m.cat === cat).map((m) => (
-                    <li key={m.id} className="flex justify-between gap-2 border-b border-border/50 py-1">
-                      <span>{m[lang]}</span>
-                      <span className="tabular-nums text-muted-foreground">{m.price} DA</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-            <p className="mt-3 text-xs text-muted-foreground">{t.hours}</p>
-          </section>
-        )}
 
         <Core mode={coreMode} confidence={confidence} />
 
