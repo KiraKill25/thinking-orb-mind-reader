@@ -261,7 +261,16 @@ function Game() {
   const table = String(q.table).slice(0, 20) || null;
   const order = useMemo(() => parseOrder(q.items), [q.items]);
   const orderNames = order.map((m) => m[lang]);
-  const ctx = { lang, latin: lang === "ar" && latin, table, items: order.map((m) => m.fr), ts: q.ts || undefined, ttl: q.ttl || undefined };
+  // Preview/testing mode: in the editor preview, start a fresh 60-min pass automatically.
+  const [testTs, setTestTs] = useState(0);
+  useEffect(() => {
+    const h = window.location.hostname;
+    if (h.startsWith("id-preview--") || h.includes("lovableproject.com") || h === "localhost") {
+      if (remainingMs(q.ts, q.ttl) === 0) setTestTs(Math.floor(Date.now() / 1000));
+    }
+  }, [q.ts, q.ttl]);
+  const passTs = testTs || q.ts;
+  const ctx = { lang, latin: lang === "ar" && latin, table, items: order.map((m) => m.fr), ts: passTs || undefined, ttl: q.ttl || undefined };
   const label = (a: (typeof ANSWER_KEYS)[number]) => (lang === "ar" && latin ? LATIN_ANSWERS[a] : t.answers[a]);
 
   const [phase, setPhase] = useState<Phase>("intro");
@@ -280,11 +289,11 @@ function Game() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [left, setLeft] = useState<number | null>(null);
   useEffect(() => {
-    const tick = () => setLeft(remainingMs(q.ts, q.ttl));
+    const tick = () => setLeft(remainingMs(passTs, q.ttl));
     tick();
     const id = setInterval(tick, 15_000);
     return () => clearInterval(id);
-  }, [q.ts, q.ttl]);
+  }, [passTs, q.ttl]);
   const expired = left === 0;
 
   useEffect(() => {
