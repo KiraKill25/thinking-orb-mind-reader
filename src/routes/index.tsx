@@ -336,7 +336,8 @@ function Game() {
     setPhase("thinking");
     try {
       const asked = h.filter((x) => x.kind === "question").length;
-      if (w.length >= 3 && asked >= 20) return setPhase("lost");
+      // 3 wrong guesses in total ends the game; the player then reveals their word
+      if (w.length >= 3) return setPhase("lost");
       const m = await next({ data: { history: h, wrongGuesses: w, questionsAsked: asked, ...ctx } });
       setMove(m);
       setConfidence(m.confidence);
