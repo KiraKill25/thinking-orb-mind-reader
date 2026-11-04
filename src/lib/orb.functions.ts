@@ -36,6 +36,21 @@ export const orbNextTurn = createServerFn({ method: "POST" })
     return nextTurn(data);
   });
 
+export const orbReactSecret = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      history: z.array(turn).max(60),
+      wrongGuesses: z.array(z.string().max(200)).max(20),
+      secret: z.string().min(1).max(120),
+      ...ctx,
+    }),
+  )
+  .handler(async ({ data }) => {
+    guard(data);
+    const { reactToSecret } = await import("./orb.server");
+    return { text: await reactToSecret(data) };
+  });
+
 export const orbJoker = createServerFn({ method: "POST" })
   .validator(z.object({ history: z.array(turn).max(60), question: z.string().min(1).max(300), ...ctx }))
   .handler(async ({ data }) => {
