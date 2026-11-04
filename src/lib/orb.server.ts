@@ -97,3 +97,21 @@ export async function jokerAnswer(d: Ctx & { history: Turn[]; question: string }
   return await result.text;
   });
 }
+
+export async function reactToSecret(d: Ctx & { history: Turn[]; wrongGuesses: string[]; secret: string }) {
+  return withFallback(async (model) => {
+    const result = streamText({
+      model,
+      maxRetries: 1,
+      system: `${voice(d)}\n\nThe game is over and you FAILED to guess. The guest now reveals what they were thinking of. React in 2-3 short sentences: stay mysterious, proud and provocative, never simply apologetic. Claim you sensed it, tease how they bluffed or which answer misled you, and weave in at least one of the items they ordered (e.g. the cup that distracted you, who now owes the next round). If the word contradicts their answers, playfully accuse them of cheating. No emojis.`,
+      messages: [
+        {
+          role: "user",
+          content: `Transcript:\n${d.history.map((h) => `${h.text} -> ${h.answer}`).join("\n") || "(none)"}\nYour wrong guesses: ${d.wrongGuesses.join(", ") || "none"}\n\nThe guest reveals: ${d.secret}`,
+        },
+      ],
+      providerOptions: opts,
+    });
+    return await result.text;
+  });
+}
